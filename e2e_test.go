@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"testing"
@@ -94,6 +95,13 @@ func TestE2E(t *testing.T) {
 	}
 	_, err = svc.DeleteCertificateAuthority(context.TODO(), deleteInput)
 	if err != nil {
+		t.Logf("err %#v", err)
+		var nfe *types.ResourceNotFoundException
+		if errors.As(err, &nfe) {
+			t.Logf("is nfe: %#v msg: %s", nfe, *nfe.Message)
+		} else {
+			t.Logf("is not nfe")
+		}
 		t.Fatalf("Failed to delete CA: %v", err)
 	}
 	t.Log("Deleted CA")

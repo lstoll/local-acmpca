@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -41,7 +42,8 @@ func (s *server) GetCertificate(ctx context.Context, log *slog.Logger, req *acmp
 
 func (s *server) DeleteCertificateAuthority(ctx context.Context, log *slog.Logger, req *acmpca.DeleteCertificateAuthorityInput) (*acmpca.DeleteCertificateAuthorityOutput, error) {
 	log.Info("delete CA", "ca", fmt.Sprintf("%#v", req))
-	return &acmpca.DeleteCertificateAuthorityOutput{}, nil
+	// return &acmpca.DeleteCertificateAuthorityOutput{}, nil
+	return nil, errors.New("error in handler")
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,16 +91,37 @@ func handleAPICall[In any, Out any](ctx context.Context, log *slog.Logger, w htt
 	}
 
 	resp, err := handler(ctx, log, req)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "handler failed", "err", err)
-		http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
-		return
+	if err == nil {
+		// succeeded, wrap up
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			slog.ErrorContext(r.Context(), "Error encoding response", "err", err)
+			http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.ErrorContext(r.Context(), "Error encoding response", "err", err)
-		http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
-		return
+	// handle possible errors
+	slog.ErrorContext(r.Context(), "handler failed", "err", err)
+
+	var (
+		errResp *apiError
+		status  = http.StatusBadRequest
+	)
+
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		errResp = apiErr
+	} else {
+		errResp = &apiError{
+			Code:    codeInternalFailure,
+			Message: fmt.Sprintf("%v", err),
+		}
+		status = http.StatusInternalServerError
+	}
+
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(errResp); err != nil {
+		return // ended
 	}
 
 	slog.InfoContext(ctx, "API call finished")
