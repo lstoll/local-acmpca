@@ -55,6 +55,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handleAPICall(r.Context(), slog.With("call", "GetCertificate"), w, r, s.GetCertificate)
 	case "DeleteCertificateAuthority":
 		handleAPICall(r.Context(), slog.With("call", "CreateCertificateAuthority"), w, r, s.DeleteCertificateAuthority)
+	case "GetCertificateAuthorityCertificate":
+		handleAPICall(r.Context(), slog.With("call", "GetCertificateAuthorityCertificate"), w, r, s.GetCACertificate)
 	default:
 		slog.WarnContext(r.Context(), "Unhandled API call", "call", spAmzTarget[1])
 		http.Error(w, "Unhandled API call "+spAmzTarget[1], http.StatusNotFound)

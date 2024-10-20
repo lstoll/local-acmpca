@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -71,7 +72,7 @@ func TestE2E(t *testing.T) {
 	caArn := caOutput.CertificateAuthorityArn
 	t.Logf("Created CA with ARN: %s\n", *caArn)
 
-	csr, err := createCSR()
+	csr, csrPub, err := createCSR()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,11 +109,28 @@ func TestE2E(t *testing.T) {
 	t.Logf("Got certificate: %s\n", *getOutput.Certificate)
 
 	// validate the certificate to make sure it should work
-	cert, err := parseCertificateFromPEM([]byte(*getOutput.Certificate))
+	caCertResp, err := svc.GetCertificateAuthorityCertificate(ctx, &acmpca.GetCertificateAuthorityCertificateInput{
+		CertificateAuthorityArn: caArn,
+	})
+	if err != nil {
+		t.Fatalf("getting CA cert: %v", err)
+	}
+
+	gotCA, err := parseCertificateFromPEM([]byte(*caCertResp.Certificate))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = cert
+
+	gotCert, err := parseCertificateFromPEM([]byte(*getOutput.Certificate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gotCert.CheckSignatureFrom(gotCA); err != nil {
+		t.Errorf("issued cert does not match CA signature: %v", err)
+	}
+	if (csrPub.(*ecdsa.PublicKey)).Equal(&gotCert.PublicKey) {
+		t.Error("retrieved cert pub get does not equal issued cert pub key")
+	}
 
 	deleteInput := &acmpca.DeleteCertificateAuthorityInput{
 		CertificateAuthorityArn: caArn,
@@ -131,10 +149,10 @@ func TestE2E(t *testing.T) {
 	t.Log("Deleted CA")
 }
 
-func createCSR() ([]byte, error) {
+func createCSR() ([]byte, crypto.PublicKey, error) {
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate private key: %v", err)
+		return nil, nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
 
 	csrTemplate := x509.CertificateRequest{
@@ -148,12 +166,12 @@ func createCSR() ([]byte, error) {
 
 	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &csrTemplate, privateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CSR: %v", err)
+		return nil, nil, fmt.Errorf("failed to create CSR: %v", err)
 	}
 
 	csrPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE REQUEST",
 		Bytes: csrBytes,
 	})
-	return csrPEM, nil
+	return csrPEM, &privateKey.PublicKey, nil
 }

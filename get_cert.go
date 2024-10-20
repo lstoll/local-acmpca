@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 )
 
+// https://docs.aws.amazon.com/privateca/latest/APIReference/API_GetCertificate.html
 func (s *server) GetCertificate(ctx context.Context, log *slog.Logger, req *acmpca.GetCertificateInput) (*acmpca.GetCertificateOutput, error) {
 	if req.CertificateArn == nil || req.CertificateAuthorityArn == nil {
 		return nil, newAPIErrorf(codeInvalidParameter, "arn for cert and authority required")

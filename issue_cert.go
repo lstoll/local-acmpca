@@ -97,6 +97,8 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 
 	// I don't think the cert ID is a uuid in practice, maybe a fingerprint or
 	// something? This will do for now.
+	//
+	// TODO - looks like it is fingerprint: https://repost.aws/knowledge-center/acm-revoke-private-certificate
 	certARN := fmt.Sprintf("%s/certificate/%s", *req.CertificateAuthorityArn, uuid.New().String())
 	if !isValidCertARN(certARN) {
 		panic("generating invalid cert ARNs")
