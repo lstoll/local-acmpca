@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"crawshaw.dev/jsonfile"
-	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 )
 
 type server struct {
@@ -22,12 +21,6 @@ type server struct {
 	certIssueDelay time.Duration
 
 	db *jsonfile.JSONFile[state]
-}
-
-func (s *server) DeleteCertificateAuthority(ctx context.Context, log *slog.Logger, req *acmpca.DeleteCertificateAuthorityInput) (*acmpca.DeleteCertificateAuthorityOutput, error) {
-	log.Info("delete CA", "ca", fmt.Sprintf("%#v", req))
-	// return &acmpca.DeleteCertificateAuthorityOutput{}, nil
-	return nil, errors.New("error in handler")
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
