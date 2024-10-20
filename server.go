@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"crawshaw.dev/jsonfile"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,13 +22,6 @@ type server struct {
 	region    string
 
 	db *jsonfile.JSONFile[state]
-}
-
-func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *acmpca.IssueCertificateInput) (*acmpca.IssueCertificateOutput, error) {
-	log.Info("issue Cert", "req", fmt.Sprintf("%#v", req))
-	return &acmpca.IssueCertificateOutput{
-		CertificateArn: aws.String("arn:aws:lol"),
-	}, nil
 }
 
 func (s *server) GetCertificate(ctx context.Context, log *slog.Logger, req *acmpca.GetCertificateInput) (*acmpca.GetCertificateOutput, error) {
@@ -45,15 +38,6 @@ func (s *server) DeleteCertificateAuthority(ctx context.Context, log *slog.Logge
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("got req: %#v", r)
-	log.Printf("got req url: %s", r.URL.String())
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("got body: %s", string(b))
-	r.Body = io.NopCloser(bytes.NewReader(b))
-
 	amzTarget := r.Header.Get("X-Amz-Target")
 	spAmzTarget := strings.Split(amzTarget, ".")
 	if amzTarget == "" || len(spAmzTarget) != 2 || spAmzTarget[0] != "ACMPrivateCA" {
@@ -61,6 +45,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid X-Amz-Target specified", http.StatusBadRequest)
 		return
 	}
+
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	slog.DebugContext(r.Context(), "request", "target", amzTarget, "body", string(b))
+	r.Body = io.NopCloser(bytes.NewReader(b))
 
 	switch spAmzTarget[1] {
 	case "CreateCertificateAuthority":
@@ -79,7 +70,11 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAPICall[In any, Out any](ctx context.Context, log *slog.Logger, w http.ResponseWriter, r *http.Request, handler func(context.Context, *slog.Logger, *In) (*Out, error)) {
-	slog.InfoContext(ctx, "Handling API call")
+	start := time.Now()
+	log.InfoContext(ctx, "Handling API call")
+	defer func() {
+		log.InfoContext(ctx, "API handle complete", "duration", time.Since(start))
+	}()
 
 	req := new(In)
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -94,12 +89,9 @@ func handleAPICall[In any, Out any](ctx context.Context, log *slog.Logger, w htt
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			slog.ErrorContext(r.Context(), "Error encoding response", "err", err)
 			http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
-			return
 		}
+		return
 	}
-
-	// handle possible errors
-	slog.ErrorContext(r.Context(), "handler failed", "err", err)
 
 	var (
 		errResp *apiError
@@ -108,8 +100,10 @@ func handleAPICall[In any, Out any](ctx context.Context, log *slog.Logger, w htt
 
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
+		slog.WarnContext(r.Context(), "api error", "err", err)
 		errResp = apiErr
 	} else {
+		slog.ErrorContext(r.Context(), "handler returned a general error", "err", err)
 		errResp = &apiError{
 			Code:    codeInternalFailure,
 			Message: fmt.Sprintf("%v", err),

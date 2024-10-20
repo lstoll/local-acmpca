@@ -5,8 +5,10 @@ import "fmt"
 type apiErrorCode string
 
 const (
-	codeInternalFailure apiErrorCode = "InternalFailure"
-	codeInvalidArgs     apiErrorCode = "InvalidArgsException"
+	codeInternalFailure  apiErrorCode = "InternalFailure"
+	codeInvalidArgs      apiErrorCode = "InvalidArgsException"
+	codeInvalidParameter apiErrorCode = "InvalidParameter"
+	codeResourceNotFound apiErrorCode = "ResourceNotFoundException"
 )
 
 type apiError struct {
