@@ -11,7 +11,7 @@ import (
 )
 
 type state struct {
-	CertificateAuthorities map[string]certificateAuthority `json:"certificateAuthorities"` // arn -> ca
+	CertificateAuthorities map[string]*certificateAuthority `json:"certificateAuthorities"` // arn -> ca
 }
 
 func loadDB(path string) (*jsonfile.JSONFile[state], error) {
@@ -31,7 +31,7 @@ type certificateAuthority struct {
 	CAPem        string                         `json:"caPEM"`
 	KeyAlg       types.KeyAlgorithm             `json:"keyAlgorithm"`
 	SigningAlg   types.SigningAlgorithm         `json:"signingAlgorithm"`
-	Certificates map[string]certificate         `json:"certificates"` // arn -> certificate
+	Certificates map[string]*certificate        `json:"certificates"` // arn -> certificate
 }
 
 type certificate struct {

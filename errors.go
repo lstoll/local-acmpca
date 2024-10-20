@@ -5,10 +5,12 @@ import "fmt"
 type apiErrorCode string
 
 const (
-	codeInternalFailure  apiErrorCode = "InternalFailure"
-	codeInvalidArgs      apiErrorCode = "InvalidArgsException"
-	codeInvalidParameter apiErrorCode = "InvalidParameter"
-	codeResourceNotFound apiErrorCode = "ResourceNotFoundException"
+	codeInternalFailure   apiErrorCode = "InternalFailure"
+	codeInvalidArgs       apiErrorCode = "InvalidArgsException"
+	codeInvalidParameter  apiErrorCode = "InvalidParameter"
+	codeResourceNotFound  apiErrorCode = "ResourceNotFoundException"
+	codeInvalidARN        apiErrorCode = "InvalidArnException"
+	codeRequestInProgress apiErrorCode = "RequestInProgressException"
 )
 
 type apiError struct {
@@ -18,7 +20,7 @@ type apiError struct {
 }
 
 func (a *apiError) Error() string {
-	return ""
+	return fmt.Sprintf("%s: %s", a.Code, a.Message)
 }
 
 func newAPIErrorf(code apiErrorCode, format string, args ...any) *apiError {

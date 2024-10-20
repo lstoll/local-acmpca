@@ -101,9 +101,9 @@ func (s *server) CreateCertificateAuthority(ctx context.Context, log *slog.Logge
 
 	if err := s.db.Write(func(s *state) error {
 		if s.CertificateAuthorities == nil {
-			s.CertificateAuthorities = make(map[string]certificateAuthority, 1)
+			s.CertificateAuthorities = make(map[string]*certificateAuthority, 1)
 		}
-		s.CertificateAuthorities[arn.String()] = certificateAuthority{
+		s.CertificateAuthorities[arn.String()] = &certificateAuthority{
 			Type:       req.CertificateAuthorityType,
 			PrivPem:    privPEM,
 			CAPem:      certBuf.String(),

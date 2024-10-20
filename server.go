@@ -13,22 +13,15 @@ import (
 	"time"
 
 	"crawshaw.dev/jsonfile"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 )
 
 type server struct {
-	accountID string
-	region    string
+	accountID      string
+	region         string
+	certIssueDelay time.Duration
 
 	db *jsonfile.JSONFile[state]
-}
-
-func (s *server) GetCertificate(ctx context.Context, log *slog.Logger, req *acmpca.GetCertificateInput) (*acmpca.GetCertificateOutput, error) {
-	log.Info("get cert", "req", fmt.Sprintf("%#v", req))
-	return &acmpca.GetCertificateOutput{
-		Certificate: aws.String("---BEGIN---"),
-	}, nil
 }
 
 func (s *server) DeleteCertificateAuthority(ctx context.Context, log *slog.Logger, req *acmpca.DeleteCertificateAuthorityInput) (*acmpca.DeleteCertificateAuthorityOutput, error) {
@@ -100,7 +93,7 @@ func handleAPICall[In any, Out any](ctx context.Context, log *slog.Logger, w htt
 
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		slog.WarnContext(r.Context(), "api error", "err", err)
+		slog.WarnContext(r.Context(), "api error", "err", apiErr)
 		errResp = apiErr
 	} else {
 		slog.ErrorContext(r.Context(), "handler returned a general error", "err", err)

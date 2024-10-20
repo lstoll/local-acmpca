@@ -20,12 +20,16 @@ func main() {
 		addr      = flag.String("addr", "127.0.0.1:8089", "Address to listen on")
 		accountID = flag.String("account-id", "111122223333", "AWS account ID to use")
 		region    = flag.String("region", "eu-west-2", "AWS region to use")
+		// AWS doesn't really document a delay, starting at 1s to be long enough to trigger the need for a retry, not long
+		// enough to be annoying in dev. Can adjust later with real-world data
+		certIssueDelay = flag.Duration("issue-delay", 1*time.Second, "How long after an issue call a certificate is ready for Get")
 	)
 	flag.Parse()
 
 	svr := &server{
-		accountID: *accountID,
-		region:    *region,
+		accountID:      *accountID,
+		region:         *region,
+		certIssueDelay: *certIssueDelay,
 	}
 
 	server := &http.Server{

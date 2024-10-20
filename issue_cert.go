@@ -51,10 +51,10 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 			err = newAPIErrorf(codeResourceNotFound, "CA %s not found", *req.CertificateAuthorityArn)
 			return
 		}
-		dbca = &ca
+		dbca = ca
 	})
 
-	caCert, err := parseCACertificateFromPEM([]byte(dbca.CAPem))
+	caCert, err := parseCertificateFromPEM([]byte(dbca.CAPem))
 	if err != nil {
 		return nil, fmt.Errorf("parsing ca %s cert: %w", *req.CertificateAuthorityArn, err)
 	}
@@ -105,9 +105,9 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 	if err := s.db.Write(func(data *state) error {
 		ca := data.CertificateAuthorities[*req.CertificateAuthorityArn]
 		if ca.Certificates == nil {
-			ca.Certificates = make(map[string]certificate, 1)
+			ca.Certificates = make(map[string]*certificate, 1)
 		}
-		ca.Certificates[certARN] = certificate{
+		ca.Certificates[certARN] = &certificate{
 			PEM:      string(certPEM),
 			IssuedAt: time.Now(),
 		}
@@ -212,7 +212,7 @@ func parseValidity(startTime time.Time, validity types.Validity) (time.Time, err
 	return endTime, nil
 }
 
-func parseCACertificateFromPEM(pemData []byte) (*x509.Certificate, error) {
+func parseCertificateFromPEM(pemData []byte) (*x509.Certificate, error) {
 	// Decode the PEM block
 	block, _ := pem.Decode(pemData)
 	if block == nil || block.Type != "CERTIFICATE" {

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -31,9 +32,10 @@ func TestE2E(t *testing.T) {
 	}
 
 	svr := &server{
-		accountID: "111122223333",
-		region:    "eu-west-2",
-		db:        db,
+		accountID:      "111122223333",
+		region:         "eu-west-2",
+		db:             db,
+		certIssueDelay: 100 * time.Millisecond, // keep test fast-is, force retry
 	}
 	httpsvr := httptest.NewServer(svr)
 
@@ -94,11 +96,23 @@ func TestE2E(t *testing.T) {
 		CertificateAuthorityArn: caArn,
 		CertificateArn:          certArn,
 	}
-	getOutput, err := svc.GetCertificate(ctx, getInput)
+	getOutput, err := acmpca.NewCertificateIssuedWaiter(svc,
+		func(o *acmpca.CertificateIssuedWaiterOptions) {
+			o.MinDelay = 1 * time.Millisecond
+			o.MaxDelay = 10 * time.Millisecond
+		},
+	).WaitForOutput(ctx, getInput, 1*time.Second)
 	if err != nil {
-		t.Fatalf("Failed to issue certificate: %v", err)
+		t.Fatalf("Failed to get certificate: %v", err)
 	}
-	t.Logf("Issued certificate: %s\n", *getOutput.Certificate)
+	t.Logf("Got certificate: %s\n", *getOutput.Certificate)
+
+	// validate the certificate to make sure it should work
+	cert, err := parseCertificateFromPEM([]byte(*getOutput.Certificate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = cert
 
 	deleteInput := &acmpca.DeleteCertificateAuthorityInput{
 		CertificateAuthorityArn: caArn,
