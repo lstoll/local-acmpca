@@ -6,6 +6,8 @@ Status: Basic CA and cert issuance works. Not throughly compared to real-world P
 
 See [e2e_test.go](e2e_test.go) for an example of what's supported.
 
+Flags can also be passed as env vars, e.g `addr` can also be set by the `LOCAL_ACMPCA_ADDR` env var.
+
 The state store can be seeded from a file, this can be useful for development configurations where an externally provisioned CA is expected, and the ARN should be consistent across runs. By default a state file without key/cert will be updated in place on first run, this result can then be committed.
 
 Example seed file for automatic provisioning:

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -28,6 +29,14 @@ func main() {
 		seed           = flag.String("seed", "", "Path to file to use to seed the store with")
 		skipSeedUpdate = flag.Bool("skip-seed-update", false, "Do not update the seed file with generated certs")
 	)
+	flag.VisitAll(func(f *flag.Flag) {
+		k := strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		if v := os.Getenv("LOCAL_ACMPCA_" + k); v != "" {
+			if err := f.Value.Set(v); err != nil {
+				panic(err)
+			}
+		}
+	})
 	flag.Parse()
 
 	var (
