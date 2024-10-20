@@ -12,18 +12,16 @@ import (
 	"net/http"
 	"strings"
 
+	"crawshaw.dev/jsonfile"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 )
 
 type server struct {
-}
+	accountID string
+	region    string
 
-func (s *server) CreateCertificateAuthority(ctx context.Context, log *slog.Logger, req *acmpca.CreateCertificateAuthorityInput) (*acmpca.CreateCertificateAuthorityOutput, error) {
-	log.Info("create CA", "ca", fmt.Sprintf("%#v", req))
-	return &acmpca.CreateCertificateAuthorityOutput{
-		CertificateAuthorityArn: aws.String("arn:aws:lol"),
-	}, nil
+	db *jsonfile.JSONFile[state]
 }
 
 func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *acmpca.IssueCertificateInput) (*acmpca.IssueCertificateOutput, error) {

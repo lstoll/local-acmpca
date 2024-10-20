@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,19 +17,20 @@ func main() {
 	defer stop()
 
 	var (
-		addr = flag.String("addr", "127.0.0.1:8089", "Address to listen on")
+		addr      = flag.String("addr", "127.0.0.1:8089", "Address to listen on")
+		accountID = flag.String("account-id", "111122223333", "AWS account ID to use")
+		region    = flag.String("region", "eu-west-2", "AWS region to use")
 	)
 	flag.Parse()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("got req: %#v", r)
-		fmt.Fprintln(w, "OK")
-	})
+	svr := &server{
+		accountID: *accountID,
+		region:    *region,
+	}
 
 	server := &http.Server{
 		Addr:    *addr,
-		Handler: mux,
+		Handler: svr,
 	}
 
 	go func() {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,7 +25,16 @@ func TestE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	svr := &server{}
+	db, err := loadDB(filepath.Join(t.TempDir(), "db.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svr := &server{
+		accountID: "111122223333",
+		region:    "eu-west-2",
+		db:        db,
+	}
 	httpsvr := httptest.NewServer(svr)
 
 	awscfg, err := config.LoadDefaultConfig(ctx,

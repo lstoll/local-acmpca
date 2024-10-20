@@ -1,10 +1,12 @@
 package main
 
+import "fmt"
+
 type apiErrorCode string
 
 const (
 	codeInternalFailure apiErrorCode = "InternalFailure"
-	err                 apiErrorCode = "err"
+	codeInvalidArgs     apiErrorCode = "InvalidArgsException"
 )
 
 type apiError struct {
@@ -17,10 +19,10 @@ func (a *apiError) Error() string {
 	return ""
 }
 
-func newAPIError(code apiErrorCode, message string) *apiError {
+func newAPIErrorf(code apiErrorCode, format string, args ...any) *apiError {
 	return &apiError{
 		Code:      code,
-		Message:   message,
+		Message:   fmt.Sprintf(format, args...),
 		RequestID: "00000000-00000000-00000000-00000000",
 	}
 }
