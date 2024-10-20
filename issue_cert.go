@@ -17,7 +17,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca/types"
-	"github.com/google/uuid"
 )
 
 const defaultTemplate = "arn:aws:acm-pca:::template/EndEntityCertificate/V1"
@@ -95,11 +94,8 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 		Bytes: signedCert,
 	})
 
-	// I don't think the cert ID is a uuid in practice, maybe a fingerprint or
-	// something? This will do for now.
-	//
-	// TODO - looks like it is fingerprint: https://repost.aws/knowledge-center/acm-revoke-private-certificate
-	certARN := fmt.Sprintf("%s/certificate/%s", *req.CertificateAuthorityArn, uuid.New().String())
+	// Appears to be the serial number, so use that.
+	certARN := fmt.Sprintf("%s/certificate/%s", *req.CertificateAuthorityArn, certTemplate.SerialNumber.Text(16))
 	if !isValidCertARN(certARN) {
 		panic("generating invalid cert ARNs")
 	}
