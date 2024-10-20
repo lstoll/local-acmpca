@@ -1,0 +1,4 @@
+CAs:
+  - arn: arn:aws:acm-pca:eu-west-2:111122223333:certificate-authority/dd2ad289-e690-44dc-9351-2e820bb15fa0
+    cn: "Partial Seeded CA"
+    keyAlgorithm: EC_prime256v1

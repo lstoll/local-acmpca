@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,13 +24,49 @@ func main() {
 		// AWS doesn't really document a delay, starting at 1s to be long enough to trigger the need for a retry, not long
 		// enough to be annoying in dev. Can adjust later with real-world data
 		certIssueDelay = flag.Duration("issue-delay", 1*time.Second, "How long after an issue call a certificate is ready for Get")
+		state          = flag.String("state", "", "Path to file to store JSON working state in. If empty, temp dir will be used")
+		seed           = flag.String("seed", "", "Path to file to use to seed the store with")
+		skipSeedUpdate = flag.Bool("skip-seed-update", false, "Do not update the seed file with generated certs")
 	)
 	flag.Parse()
+
+	var (
+		cleanState bool
+		statePath  string = *state
+	)
+	if statePath == "" {
+		sp, err := os.CreateTemp("", "local-acmpca-state*.json")
+		if err != nil {
+			slog.Error("failed to create state file", "err", err)
+			os.Exit(1)
+		}
+		statePath = sp.Name()
+		_ = sp.Close()
+		_ = os.Remove(statePath)
+		cleanState = true
+	}
+
+	slog.Info("Load/create state", "path", statePath)
+	db, err := loadDB(statePath)
+	if err != nil {
+		slog.Error("failed to load/create state", "err", err)
+		os.Exit(1)
+	}
+
+	if *seed != "" {
+		slog.Info("Seeding state", "path", *seed)
+		if err := loadAndSeed(*seed, db, *skipSeedUpdate); err != nil {
+			slog.Error("failed to load/open state", "err", err)
+			os.Exit(1)
+		}
+	}
 
 	svr := &server{
 		accountID:      *accountID,
 		region:         *region,
 		certIssueDelay: *certIssueDelay,
+
+		db: db,
 	}
 
 	server := &http.Server{
@@ -54,5 +91,11 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Could not gracefully shut down the server: %v\n", err)
 	}
+
+	if cleanState {
+		slog.Info("Removing temporary state file", "path", statePath)
+		_ = os.Remove(statePath)
+	}
+
 	log.Println("Server stopped")
 }
