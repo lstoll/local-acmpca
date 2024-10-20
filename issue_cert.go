@@ -266,7 +266,7 @@ func validateIssueCertificateInputinputinput(input *acmpca.IssueCertificateInput
 	}
 
 	// Check if Csr is set
-	if input.Csr == nil || len(input.Csr) == 0 {
+	if len(input.Csr) == 0 {
 		return newAPIErrorf(codeInvalidParameter, "Csr is required and cannot be empty")
 	}
 
@@ -297,7 +297,7 @@ func validateIssueCertificateInputinputinput(input *acmpca.IssueCertificateInput
 		types.ValidityPeriodTypeEndDate:  true,
 	}
 	if !validTypes[input.Validity.Type] {
-		return newAPIErrorf(codeInvalidParameter, fmt.Sprintf("Validity.Type '%v' is invalid", input.Validity.Type))
+		return newAPIErrorf(codeInvalidParameter, "Validity.Type '%v' is invalid", input.Validity.Type)
 	}
 
 	// Optional: Validate IdempotencyToken if provided (not required but useful to ensure length)
