@@ -19,10 +19,20 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/acmpca/types"
 )
 
-const defaultTemplate = "arn:aws:acm-pca:::template/EndEntityCertificate/V1"
+const defaultTemplate = templateEndEntityCertificateV1
 
-var templates map[string]func(caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error) = map[string]func(caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error){
-	"arn:aws:acm-pca:::template/EndEntityCertificate/V1": processEndEntityCSR,
+const (
+	templateEndEntityCertificateV1 = "arn:aws:acm-pca:::template/EndEntityCertificate/V1"
+	templateEndEntityClientAuthV1  = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate/V1"
+	templateEndEntityServerAuthV1  = "arn:aws:acm-pca:::template/EndEntityServerAuthCertificate/V1"
+)
+
+type templateIssuerFn func(templateARN string, caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (cert *x509.Certificate, csrPub crypto.PublicKey, err error)
+
+var templates map[string]templateIssuerFn = map[string]templateIssuerFn{
+	templateEndEntityCertificateV1: processEndEntityCSR,
+	templateEndEntityClientAuthV1:  processEndEntityCSR,
+	templateEndEntityServerAuthV1:  processEndEntityCSR,
 }
 
 // https://docs.aws.amazon.com/privateca/latest/APIReference/API_IssueCertificate.html
@@ -68,7 +78,7 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 		return nil, newAPIErrorf(codeInvalidArgs, "validity not parseable")
 	}
 
-	certTemplate, csrPub, err := templateFn(caCert, req.Csr, notAfter)
+	certTemplate, csrPub, err := templateFn(templateARN, caCert, req.Csr, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cert from template: %w", err)
 	}
@@ -119,7 +129,7 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 	}, nil
 }
 
-func processEndEntityCSR(caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error) {
+func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error) {
 	csrBlock, _ := pem.Decode(csrPEM)
 	if csrBlock == nil || csrBlock.Type != "CERTIFICATE REQUEST" {
 		return nil, nil, fmt.Errorf("failed to decode CSR")
@@ -144,7 +154,6 @@ func processEndEntityCSR(caCert *x509.Certificate, csrPEM []byte, notAfter time.
 		NotAfter:  notAfter,
 
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 
@@ -158,6 +167,17 @@ func processEndEntityCSR(caCert *x509.Certificate, csrPEM []byte, notAfter time.
 
 		// CRL Distribution Points from CA configuration
 		// CRLDistributionPoints: crlDistPoints,
+	}
+
+	switch templateARN {
+	case templateEndEntityCertificateV1:
+		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	case templateEndEntityClientAuthV1:
+		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	case templateEndEntityServerAuthV1:
+		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	default:
+		return nil, nil, fmt.Errorf("template arn %s not supported", templateARN)
 	}
 
 	// Subject Key Identifier derived from CSR's public key
