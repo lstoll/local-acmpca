@@ -202,14 +202,50 @@ func deriveSubjectKeyIdentifier(pubKey crypto.PublicKey) ([]byte, error) {
 func parseValidity(startTime time.Time, validity types.Validity) (time.Time, error) {
 	var endTime time.Time
 
+	// https://docs.aws.amazon.com/privateca/latest/APIReference/API_Validity.html
+
 	switch validity.Type {
 	case types.ValidityPeriodTypeEndDate:
-		// If the Type is END_DATE, we expect the Value to be a Unix timestamp (seconds since epoch)
-		endTime = time.Unix(int64(*validity.Value), 0)
+		// The specific date and time when the certificate will expire,
+		// expressed using UTCTime (YYMMDDHHMMSS) or GeneralizedTime
+		// (YYYYMMDDHHMMSS) format. When UTCTime is used, if the year field (YY)
+		// is greater than or equal to 50, the year is interpreted as 19YY. If
+		// the year field is less than 50, the year is interpreted as 20YY.
+		dateStr := fmt.Sprintf("%d", *validity.Value)
+
+		var year, month, day, hour, minute, second int
+		var err error
+
+		switch len(dateStr) {
+		case 12: // UTCTime format: YYMMDDHHMMSS
+			_, err = fmt.Sscanf(dateStr, "%2d%2d%2d%2d%2d%2d", &year, &month, &day, &hour, &minute, &second)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("failed to parse UTCTime format: %w", err)
+			}
+			// Apply the YY year interpretation rule
+			if year >= 50 {
+				year += 1900
+			} else {
+				year += 2000
+			}
+		case 14: // GeneralizedTime format: YYYYMMDDHHMMSS
+			_, err = fmt.Sscanf(dateStr, "%4d%2d%2d%2d%2d%2d", &year, &month, &day, &hour, &minute, &second)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("failed to parse GeneralizedTime format: %w", err)
+			}
+		default:
+			return time.Time{}, fmt.Errorf("invalid date format: expected 12 digits (UTCTime) or 14 digits (GeneralizedTime), got %d", len(dateStr))
+		}
+
+		endTime = time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
 
 	case types.ValidityPeriodTypeAbsolute:
-		// For ABSOLUTE, Value is a time.Duration in seconds from the startTime
-		endTime = startTime.Add(time.Duration(*validity.Value) * time.Second)
+		// The specific date and time when the validity of a certificate will
+		// start or expire, expressed in seconds since the Unix Epoch.
+		endTime = time.Unix(int64(*validity.Value), 0)
+
+	// The relative time from the moment of issuance until the certificate will
+	// expire, expressed in days, months, or years.
 
 	case types.ValidityPeriodTypeDays:
 		// For DAYS, Value is the number of days from the start date
