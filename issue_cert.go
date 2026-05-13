@@ -8,11 +8,17 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
@@ -22,17 +28,19 @@ import (
 const defaultTemplate = templateEndEntityCertificateV1
 
 const (
-	templateEndEntityCertificateV1 = "arn:aws:acm-pca:::template/EndEntityCertificate/V1"
-	templateEndEntityClientAuthV1  = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate/V1"
-	templateEndEntityServerAuthV1  = "arn:aws:acm-pca:::template/EndEntityServerAuthCertificate/V1"
+	templateEndEntityCertificateV1            = "arn:aws:acm-pca:::template/EndEntityCertificate/V1"
+	templateEndEntityClientAuthV1             = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate/V1"
+	templateEndEntityServerAuthV1             = "arn:aws:acm-pca:::template/EndEntityServerAuthCertificate/V1"
+	templateEndEntityCertificateAPIPassthruV1 = "arn:aws:acm-pca:::template/EndEntityCertificate_APIPassthrough/V1"
 )
 
-type templateIssuerFn func(templateARN string, caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (cert *x509.Certificate, csrPub crypto.PublicKey, err error)
+type templateIssuerFn func(templateARN string, caCert *x509.Certificate, req *acmpca.IssueCertificateInput, notAfter time.Time) (cert *x509.Certificate, csrPub crypto.PublicKey, err error)
 
 var templates map[string]templateIssuerFn = map[string]templateIssuerFn{
-	templateEndEntityCertificateV1: processEndEntityCSR,
-	templateEndEntityClientAuthV1:  processEndEntityCSR,
-	templateEndEntityServerAuthV1:  processEndEntityCSR,
+	templateEndEntityCertificateV1:            processEndEntityCSR,
+	templateEndEntityClientAuthV1:             processEndEntityCSR,
+	templateEndEntityServerAuthV1:             processEndEntityCSR,
+	templateEndEntityCertificateAPIPassthruV1: processEndEntityCSR,
 }
 
 // https://docs.aws.amazon.com/privateca/latest/APIReference/API_IssueCertificate.html
@@ -78,7 +86,7 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 		return nil, newAPIErrorf(codeInvalidArgs, "validity not parseable")
 	}
 
-	certTemplate, csrPub, err := templateFn(templateARN, caCert, req.Csr, notAfter)
+	certTemplate, csrPub, err := templateFn(templateARN, caCert, req, notAfter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cert from template: %w", err)
 	}
@@ -129,8 +137,8 @@ func (s *server) IssueCertificate(ctx context.Context, log *slog.Logger, req *ac
 	}, nil
 }
 
-func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []byte, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error) {
-	csrBlock, _ := pem.Decode(csrPEM)
+func processEndEntityCSR(templateARN string, caCert *x509.Certificate, req *acmpca.IssueCertificateInput, notAfter time.Time) (*x509.Certificate, crypto.PublicKey, error) {
+	csrBlock, _ := pem.Decode(req.Csr)
 	if csrBlock == nil || csrBlock.Type != "CERTIFICATE REQUEST" {
 		return nil, nil, fmt.Errorf("failed to decode CSR")
 	}
@@ -145,10 +153,24 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []
 		return nil, nil, fmt.Errorf("CSR signature invalid: %v", err)
 	}
 
+	allowAPIPassthrough := templateARN == templateEndEntityCertificateAPIPassthruV1
+
+	if !allowAPIPassthrough && req.ApiPassthrough != nil {
+		return nil, nil, newAPIErrorf(codeInvalidParameter, "ApiPassthrough is only valid with an APIPassthrough template")
+	}
+
+	// Subject: per AWS docs, APIPassthrough templates take Subject from the API
+	// when provided, falling back to the CSR. Non-passthrough templates always
+	// use the CSR subject.
+	subject := csr.Subject
+	if allowAPIPassthrough && req.ApiPassthrough != nil && req.ApiPassthrough.Subject != nil {
+		subject = convertASN1SubjectToPKIXName(req.ApiPassthrough.Subject)
+	}
+
 	// Create the new certificate based on the CSR and template
 	certTemplate := x509.Certificate{
 		SerialNumber: mustGenCertSerial(),
-		Subject:      csr.Subject, // Passthrough from CSR
+		Subject:      subject,
 
 		NotBefore: time.Now().Add(-60 * time.Minute),
 		NotAfter:  notAfter,
@@ -158,9 +180,10 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []
 		IsCA:                  false,
 
 		// Passthrough subject alternative names from CSR
-		DNSNames:    csr.DNSNames,
-		IPAddresses: csr.IPAddresses,
-		URIs:        csr.URIs,
+		DNSNames:       csr.DNSNames,
+		IPAddresses:    csr.IPAddresses,
+		URIs:           csr.URIs,
+		EmailAddresses: csr.EmailAddresses,
 
 		// Authority Key Identifier from CA's SKI
 		AuthorityKeyId: caCert.SubjectKeyId,
@@ -170,7 +193,7 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []
 	}
 
 	switch templateARN {
-	case templateEndEntityCertificateV1:
+	case templateEndEntityCertificateV1, templateEndEntityCertificateAPIPassthruV1:
 		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 	case templateEndEntityClientAuthV1:
 		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
@@ -180,6 +203,12 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []
 		return nil, nil, fmt.Errorf("template arn %s not supported", templateARN)
 	}
 
+	if allowAPIPassthrough && req.ApiPassthrough != nil && req.ApiPassthrough.Extensions != nil {
+		if err := applyAPIPassthroughExtensions(&certTemplate, req.ApiPassthrough.Extensions); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// Subject Key Identifier derived from CSR's public key
 	certTemplate.SubjectKeyId, err = deriveSubjectKeyIdentifier(csr.PublicKey)
 	if err != nil {
@@ -187,6 +216,107 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, csrPEM []
 	}
 
 	return &certTemplate, csr.PublicKey, nil
+}
+
+// applyAPIPassthroughExtensions merges API-supplied extensions onto a template
+// that has already been populated with the template's fixed values. Per AWS
+// docs the template's own extensions (KeyUsage, ExtKeyUsage, BasicConstraints)
+// take priority and must not be overridden, so those are skipped here. SANs
+// from the API replace SANs from the CSR. CertificatePolicies and
+// CustomExtensions are passed through.
+func applyAPIPassthroughExtensions(cert *x509.Certificate, ext *types.Extensions) error {
+	if len(ext.SubjectAlternativeNames) > 0 {
+		cert.DNSNames = nil
+		cert.IPAddresses = nil
+		cert.URIs = nil
+		cert.EmailAddresses = nil
+		for _, gn := range ext.SubjectAlternativeNames {
+			if err := applyGeneralName(cert, gn); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, p := range ext.CertificatePolicies {
+		if p.CertPolicyId == nil {
+			continue
+		}
+		oid, err := parseOID(*p.CertPolicyId)
+		if err != nil {
+			return newAPIErrorf(codeInvalidParameter, "invalid CertPolicyId %q: %v", *p.CertPolicyId, err)
+		}
+		cert.PolicyIdentifiers = append(cert.PolicyIdentifiers, oid)
+	}
+
+	for _, ce := range ext.CustomExtensions {
+		if ce.ObjectIdentifier == nil || ce.Value == nil {
+			return newAPIErrorf(codeInvalidParameter, "CustomExtension requires ObjectIdentifier and Value")
+		}
+		oid, err := parseOID(*ce.ObjectIdentifier)
+		if err != nil {
+			return newAPIErrorf(codeInvalidParameter, "invalid CustomExtension OID %q: %v", *ce.ObjectIdentifier, err)
+		}
+		raw, err := base64.StdEncoding.DecodeString(*ce.Value)
+		if err != nil {
+			return newAPIErrorf(codeInvalidParameter, "CustomExtension Value must be base64: %v", err)
+		}
+		critical := false
+		if ce.Critical != nil {
+			critical = *ce.Critical
+		}
+		cert.ExtraExtensions = append(cert.ExtraExtensions, pkix.Extension{
+			Id:       oid,
+			Critical: critical,
+			Value:    raw,
+		})
+	}
+
+	return nil
+}
+
+func applyGeneralName(cert *x509.Certificate, gn types.GeneralName) error {
+	switch {
+	case gn.DnsName != nil:
+		cert.DNSNames = append(cert.DNSNames, *gn.DnsName)
+	case gn.IpAddress != nil:
+		ip := net.ParseIP(*gn.IpAddress)
+		if ip == nil {
+			return newAPIErrorf(codeInvalidParameter, "invalid IpAddress %q", *gn.IpAddress)
+		}
+		cert.IPAddresses = append(cert.IPAddresses, ip)
+	case gn.UniformResourceIdentifier != nil:
+		u, err := url.Parse(*gn.UniformResourceIdentifier)
+		if err != nil {
+			return newAPIErrorf(codeInvalidParameter, "invalid URI %q: %v", *gn.UniformResourceIdentifier, err)
+		}
+		cert.URIs = append(cert.URIs, u)
+	case gn.Rfc822Name != nil:
+		cert.EmailAddresses = append(cert.EmailAddresses, *gn.Rfc822Name)
+	case gn.DirectoryName != nil:
+		// Encode as a directoryName GeneralName extra in SAN. Go doesn't expose
+		// directoryName SANs directly, so emit a raw extension if needed. For
+		// development use, skip silently if no other names are set.
+		return newAPIErrorf(codeInvalidParameter, "DirectoryName SAN not supported")
+	default:
+		return newAPIErrorf(codeInvalidParameter, "unsupported GeneralName variant")
+	}
+	return nil
+}
+
+func parseOID(s string) (asn1.ObjectIdentifier, error) {
+	parts := strings.Split(s, ".")
+	oid := make(asn1.ObjectIdentifier, 0, len(parts))
+	for _, p := range parts {
+		var n int
+		if _, err := fmt.Sscanf(p, "%d", &n); err != nil {
+			return nil, fmt.Errorf("component %q not an integer", p)
+		}
+		oid = append(oid, n)
+	}
+	if len(oid) < 2 {
+		return nil, fmt.Errorf("oid must have at least two components")
+	}
+	return oid, nil
 }
 
 func deriveSubjectKeyIdentifier(pubKey crypto.PublicKey) ([]byte, error) {
