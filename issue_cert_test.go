@@ -1,10 +1,20 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"net"
+	"net/url"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca/types"
 )
 
@@ -181,3 +191,128 @@ func TestParseValidity(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessEndEntityCSR_APIPassthrough(t *testing.T) {
+	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
+
+	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "from-csr.example.com"}, []string{"csr-only.example.com"})
+
+	// API passthrough: API Subject and SANs should win over CSR.
+	overrideURI, _ := url.Parse("spiffe://example.com/workload")
+	req := &acmpca.IssueCertificateInput{
+		Csr:         csrPEM,
+		TemplateArn: aws.String(templateEndEntityCertificateAPIPassthruV1),
+		ApiPassthrough: &types.ApiPassthrough{
+			Subject: &types.ASN1Subject{
+				CommonName:   aws.String("api.example.com"),
+				Organization: aws.String("API Org"),
+			},
+			Extensions: &types.Extensions{
+				SubjectAlternativeNames: []types.GeneralName{
+					{DnsName: aws.String("api-san.example.com")},
+					{IpAddress: aws.String("10.0.0.1")},
+					{UniformResourceIdentifier: aws.String(overrideURI.String())},
+					{Rfc822Name: aws.String("ops@example.com")},
+				},
+				CertificatePolicies: []types.PolicyInformation{
+					{CertPolicyId: aws.String("1.3.6.1.4.1.99999.1")},
+				},
+				CustomExtensions: []types.CustomExtension{
+					{
+						ObjectIdentifier: aws.String("1.3.6.1.4.1.99999.2"),
+						Value:            aws.String("BAYBAgME"), // base64
+						Critical:         aws.Bool(true),
+					},
+				},
+			},
+		},
+	}
+
+	cert, _, err := processEndEntityCSR(templateEndEntityCertificateAPIPassthruV1, caCert, req, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("processEndEntityCSR: %v", err)
+	}
+
+	if cert.Subject.CommonName != "api.example.com" {
+		t.Errorf("Subject.CommonName = %q, want api.example.com", cert.Subject.CommonName)
+	}
+	if !slices.Equal(cert.DNSNames, []string{"api-san.example.com"}) {
+		t.Errorf("DNSNames = %v, want [api-san.example.com]", cert.DNSNames)
+	}
+	if len(cert.IPAddresses) != 1 || !cert.IPAddresses[0].Equal(net.ParseIP("10.0.0.1")) {
+		t.Errorf("IPAddresses = %v, want [10.0.0.1]", cert.IPAddresses)
+	}
+	if len(cert.URIs) != 1 || cert.URIs[0].String() != overrideURI.String() {
+		t.Errorf("URIs = %v, want [%s]", cert.URIs, overrideURI)
+	}
+	if !slices.Equal(cert.EmailAddresses, []string{"ops@example.com"}) {
+		t.Errorf("EmailAddresses = %v, want [ops@example.com]", cert.EmailAddresses)
+	}
+	if len(cert.PolicyIdentifiers) != 1 || cert.PolicyIdentifiers[0].String() != "1.3.6.1.4.1.99999.1" {
+		t.Errorf("PolicyIdentifiers = %v, want [1.3.6.1.4.1.99999.1]", cert.PolicyIdentifiers)
+	}
+	if len(cert.ExtraExtensions) != 1 || cert.ExtraExtensions[0].Id.String() != "1.3.6.1.4.1.99999.2" || !cert.ExtraExtensions[0].Critical {
+		t.Errorf("ExtraExtensions = %+v, want one critical extension with OID 1.3.6.1.4.1.99999.2", cert.ExtraExtensions)
+	}
+
+	// Template ExtKeyUsage must always come from the template, not the API.
+	want := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	if !slices.Equal(cert.ExtKeyUsage, want) {
+		t.Errorf("ExtKeyUsage = %v, want %v", cert.ExtKeyUsage, want)
+	}
+}
+
+func TestProcessEndEntityCSR_PassthroughRejectedOnNonPassthroughTemplate(t *testing.T) {
+	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
+	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "x"}, nil)
+
+	req := &acmpca.IssueCertificateInput{
+		Csr: csrPEM,
+		ApiPassthrough: &types.ApiPassthrough{
+			Subject: &types.ASN1Subject{CommonName: aws.String("api.example.com")},
+		},
+	}
+
+	if _, _, err := processEndEntityCSR(templateEndEntityCertificateV1, caCert, req, time.Now().Add(time.Hour)); err == nil {
+		t.Error("expected error when ApiPassthrough is supplied with a non-passthrough template")
+	}
+}
+
+func TestProcessEndEntityCSR_NoPassthrough_FallsBackToCSR(t *testing.T) {
+	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
+	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "from-csr.example.com"}, []string{"csr.example.com"})
+
+	req := &acmpca.IssueCertificateInput{
+		Csr:         csrPEM,
+		TemplateArn: aws.String(templateEndEntityCertificateAPIPassthruV1),
+	}
+
+	cert, _, err := processEndEntityCSR(templateEndEntityCertificateAPIPassthruV1, caCert, req, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("processEndEntityCSR: %v", err)
+	}
+	if cert.Subject.CommonName != "from-csr.example.com" {
+		t.Errorf("Subject.CommonName = %q, want from-csr.example.com", cert.Subject.CommonName)
+	}
+	if !slices.Equal(cert.DNSNames, []string{"csr.example.com"}) {
+		t.Errorf("DNSNames = %v, want [csr.example.com]", cert.DNSNames)
+	}
+}
+
+func makeTestCSR(t *testing.T, subject pkix.Name, dnsNames []string) ([]byte, *ecdsa.PrivateKey) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject:            subject,
+		DNSNames:           dnsNames,
+		SignatureAlgorithm: x509.ECDSAWithSHA256,
+	}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), priv
+}
+

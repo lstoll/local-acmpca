@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 go build -o /local-acmpca
 
 RUN mkdir /empty-dir
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian13
 
 WORKDIR /
 

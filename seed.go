@@ -95,7 +95,7 @@ func loadAndSeed(path string, db *jsonfile.JSONFile[state], skipUpdate bool) err
 
 			derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 			if err != nil {
-				return fmt.Errorf("Failed to create certificate: %w", err)
+				return fmt.Errorf("failed to create certificate: %w", err)
 			}
 
 			ca.CAPem = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes}))

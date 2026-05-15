@@ -41,7 +41,7 @@ func main() {
 
 	var (
 		cleanState bool
-		statePath  string = *state
+		statePath         = *state
 	)
 	if statePath == "" {
 		sp, err := os.CreateTemp("", "local-acmpca-state*.json")
