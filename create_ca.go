@@ -91,12 +91,12 @@ func (s *server) CreateCertificateAuthority(ctx context.Context, log *slog.Logge
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, pub, priv)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create certificate: %w", err)
+		return nil, fmt.Errorf("failed to create certificate: %w", err)
 	}
 
 	var certBuf bytes.Buffer
 	if err := pem.Encode(&certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
-		return nil, fmt.Errorf("Failed to pem encode cert: %v", err)
+		return nil, fmt.Errorf("failed to pem encode cert: %v", err)
 	}
 
 	if err := s.db.Write(func(s *state) error {

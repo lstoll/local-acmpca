@@ -412,7 +412,7 @@ func parseCertificateFromPEM(pemData []byte) (*x509.Certificate, error) {
 	return caCert, nil
 }
 
-func parsePrivateKeyFromPEM(pemData []byte) (interface{}, error) {
+func parsePrivateKeyFromPEM(pemData []byte) (any, error) {
 	// Decode the PEM block
 	block, _ := pem.Decode(pemData)
 	if block == nil {
