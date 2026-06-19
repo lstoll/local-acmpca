@@ -262,6 +262,78 @@ func TestProcessEndEntityCSR_APIPassthrough(t *testing.T) {
 	}
 }
 
+func TestProcessEndEntityCSR_ExtKeyUsageByTemplate(t *testing.T) {
+	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
+	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "x"}, nil)
+
+	tests := []struct {
+		template string
+		want     []x509.ExtKeyUsage
+	}{
+		{templateEndEntityCertificateV1, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}},
+		{templateEndEntityCertificateAPIPassthruV1, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}},
+		{templateEndEntityClientAuthV1, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}},
+		{templateEndEntityClientAuthAPIPassthruV1, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}},
+		{templateEndEntityServerAuthV1, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}},
+		{templateEndEntityServerAuthAPIPassthruV1, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.template, func(t *testing.T) {
+			req := &acmpca.IssueCertificateInput{
+				Csr:         csrPEM,
+				TemplateArn: aws.String(tt.template),
+			}
+			// For passthrough templates, attempt to override the EKU via the API.
+			// It must be ignored in favour of the template-defined usages.
+			if apiPassthroughTemplates[tt.template] {
+				req.ApiPassthrough = &types.ApiPassthrough{
+					Extensions: &types.Extensions{
+						ExtendedKeyUsage: []types.ExtendedKeyUsage{
+							{ExtendedKeyUsageType: types.ExtendedKeyUsageTypeCodeSigning},
+						},
+					},
+				}
+			}
+
+			cert, _, err := processEndEntityCSR(tt.template, caCert, req, time.Now().Add(time.Hour))
+			if err != nil {
+				t.Fatalf("processEndEntityCSR: %v", err)
+			}
+			if !slices.Equal(cert.ExtKeyUsage, tt.want) {
+				t.Errorf("ExtKeyUsage = %v, want %v", cert.ExtKeyUsage, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcessEndEntityCSR_CustomExtensionReservedOIDRejected(t *testing.T) {
+	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
+	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "x"}, nil)
+
+	// A CustomExtension targeting the Key Usage OID (2.5.29.15) must be rejected:
+	// the template defines Key Usage and it takes priority. Go would otherwise let
+	// the ExtraExtension override the template field.
+	req := &acmpca.IssueCertificateInput{
+		Csr:         csrPEM,
+		TemplateArn: aws.String(templateEndEntityCertificateAPIPassthruV1),
+		ApiPassthrough: &types.ApiPassthrough{
+			Extensions: &types.Extensions{
+				CustomExtensions: []types.CustomExtension{
+					{
+						ObjectIdentifier: aws.String("2.5.29.15"),
+						Value:            aws.String("AwIFoA=="),
+					},
+				},
+			},
+		},
+	}
+
+	if _, _, err := processEndEntityCSR(templateEndEntityCertificateAPIPassthruV1, caCert, req, time.Now().Add(time.Hour)); err == nil {
+		t.Error("expected error when a CustomExtension targets a template-managed OID")
+	}
+}
+
 func TestProcessEndEntityCSR_PassthroughRejectedOnNonPassthroughTemplate(t *testing.T) {
 	caCert := &x509.Certificate{SubjectKeyId: []byte{0xCA, 0xFE}}
 	csrPEM, _ := makeTestCSR(t, pkix.Name{CommonName: "x"}, nil)

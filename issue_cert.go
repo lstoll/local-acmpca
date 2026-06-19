@@ -32,6 +32,8 @@ const (
 	templateEndEntityClientAuthV1             = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate/V1"
 	templateEndEntityServerAuthV1             = "arn:aws:acm-pca:::template/EndEntityServerAuthCertificate/V1"
 	templateEndEntityCertificateAPIPassthruV1 = "arn:aws:acm-pca:::template/EndEntityCertificate_APIPassthrough/V1"
+	templateEndEntityClientAuthAPIPassthruV1  = "arn:aws:acm-pca:::template/EndEntityClientAuthCertificate_APIPassthrough/V1"
+	templateEndEntityServerAuthAPIPassthruV1  = "arn:aws:acm-pca:::template/EndEntityServerAuthCertificate_APIPassthrough/V1"
 )
 
 type templateIssuerFn func(templateARN string, caCert *x509.Certificate, req *acmpca.IssueCertificateInput, notAfter time.Time) (cert *x509.Certificate, csrPub crypto.PublicKey, err error)
@@ -41,6 +43,34 @@ var templates map[string]templateIssuerFn = map[string]templateIssuerFn{
 	templateEndEntityClientAuthV1:             processEndEntityCSR,
 	templateEndEntityServerAuthV1:             processEndEntityCSR,
 	templateEndEntityCertificateAPIPassthruV1: processEndEntityCSR,
+	templateEndEntityClientAuthAPIPassthruV1:  processEndEntityCSR,
+	templateEndEntityServerAuthAPIPassthruV1:  processEndEntityCSR,
+}
+
+// apiPassthroughTemplates is the set of templates that accept an ApiPassthrough
+// block. For all other templates, supplying ApiPassthrough is an error.
+var apiPassthroughTemplates = map[string]bool{
+	templateEndEntityCertificateAPIPassthruV1: true,
+	templateEndEntityClientAuthAPIPassthruV1:  true,
+	templateEndEntityServerAuthAPIPassthruV1:  true,
+}
+
+// reservedExtensionOIDs are the standard X.509 extensions that these templates
+// define themselves. Per AWS PCA's "template definition always takes highest
+// priority" rule, an ApiPassthrough CustomExtension is not allowed to set any
+// of these — doing so would let the caller override a template-managed value.
+// (Go's x509.CreateCertificate would happily honour an ExtraExtension over the
+// template field, so we must reject rather than silently drop.)
+var reservedExtensionOIDs = map[string]string{
+	"2.5.29.14":         "Subject Key Identifier",
+	"2.5.29.15":         "Key Usage",
+	"2.5.29.17":         "Subject Alternative Name",
+	"2.5.29.19":         "Basic Constraints",
+	"2.5.29.31":         "CRL Distribution Points",
+	"2.5.29.32":         "Certificate Policies",
+	"2.5.29.35":         "Authority Key Identifier",
+	"2.5.29.37":         "Extended Key Usage",
+	"1.3.6.1.5.5.7.1.1": "Authority Information Access",
 }
 
 // https://docs.aws.amazon.com/privateca/latest/APIReference/API_IssueCertificate.html
@@ -153,7 +183,7 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, req *acmp
 		return nil, nil, fmt.Errorf("CSR signature invalid: %v", err)
 	}
 
-	allowAPIPassthrough := templateARN == templateEndEntityCertificateAPIPassthruV1
+	allowAPIPassthrough := apiPassthroughTemplates[templateARN]
 
 	if !allowAPIPassthrough && req.ApiPassthrough != nil {
 		return nil, nil, newAPIErrorf(codeInvalidParameter, "ApiPassthrough is only valid with an APIPassthrough template")
@@ -192,12 +222,16 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, req *acmp
 		// CRLDistributionPoints: crlDistPoints,
 	}
 
+	// ExtKeyUsage is always fixed by the template. For the APIPassthrough
+	// variants AWS treats KeyUsage/ExtendedKeyUsage as template-defined values
+	// that take priority, so anything supplied via ApiPassthrough.Extensions is
+	// ignored (see applyAPIPassthroughExtensions).
 	switch templateARN {
 	case templateEndEntityCertificateV1, templateEndEntityCertificateAPIPassthruV1:
 		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-	case templateEndEntityClientAuthV1:
+	case templateEndEntityClientAuthV1, templateEndEntityClientAuthAPIPassthruV1:
 		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	case templateEndEntityServerAuthV1:
+	case templateEndEntityServerAuthV1, templateEndEntityServerAuthAPIPassthruV1:
 		certTemplate.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	default:
 		return nil, nil, fmt.Errorf("template arn %s not supported", templateARN)
@@ -223,8 +257,15 @@ func processEndEntityCSR(templateARN string, caCert *x509.Certificate, req *acmp
 // docs the template's own extensions (KeyUsage, ExtKeyUsage, BasicConstraints)
 // take priority and must not be overridden, so those are skipped here. SANs
 // from the API replace SANs from the CSR. CertificatePolicies and
-// CustomExtensions are passed through.
+// CustomExtensions are passed through, except CustomExtensions that target a
+// template-managed OID (see reservedExtensionOIDs), which are rejected.
 func applyAPIPassthroughExtensions(cert *x509.Certificate, ext *types.Extensions) error {
+	// KeyUsage and ExtendedKeyUsage are template-defined for every template we
+	// support. We deliberately ignore whatever the caller passes here so the
+	// template's fixed usages (set by the caller of this function) always win.
+	_ = ext.KeyUsage
+	_ = ext.ExtendedKeyUsage
+
 	if len(ext.SubjectAlternativeNames) > 0 {
 		cert.DNSNames = nil
 		cert.IPAddresses = nil
@@ -255,6 +296,9 @@ func applyAPIPassthroughExtensions(cert *x509.Certificate, ext *types.Extensions
 		oid, err := parseOID(*ce.ObjectIdentifier)
 		if err != nil {
 			return newAPIErrorf(codeInvalidParameter, "invalid CustomExtension OID %q: %v", *ce.ObjectIdentifier, err)
+		}
+		if name, reserved := reservedExtensionOIDs[oid.String()]; reserved {
+			return newAPIErrorf(codeInvalidParameter, "CustomExtension OID %s (%s) is managed by the template and cannot be overridden", oid, name)
 		}
 		raw, err := base64.StdEncoding.DecodeString(*ce.Value)
 		if err != nil {
